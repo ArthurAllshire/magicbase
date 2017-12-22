@@ -1,12 +1,13 @@
 import math
 from pyswervedrive.swervemodule import SwerveModule
-from robot import Robot
 
 
 class PhysicsEngine:
 
     X_WHEELBASE = 0.6
     Y_WHEELBASE = 0.6
+
+    M_TO_FT = 3.28084
 
     def __init__(self, controller):
         self.controller = controller
@@ -23,7 +24,7 @@ class PhysicsEngine:
         # for modules [a, b, c, d]. used to iterate over them
         self.module_steer_can_ids = [8, 2, 4, 11]
         self.module_drive_can_ids = [13, 9, 14, 6]
-        self.module_steer_offsets = [0.401, 0.249, 0.797, 0.079]
+        self.module_steer_offsets = [-2.703, -2.750, -1.888, -2.925]
 
         self.controller.add_device_gyro_channel('bno055')
 
@@ -38,17 +39,17 @@ class PhysicsEngine:
         :param tm_diff: Difference between current time and time when last checked
         """
 
-        motors_percentvbus = []
+        motor_velocities = []
         for can_id in self.module_drive_can_ids:
-            # max speed of motor in ticks/sec (native vel is ticks/100ms)
-            max_speed = Robot.module_drive_free_speed*10
             # divide value by 1023 as it gets multiplied by 1023 in talon code
-            percentvbus = hal_data['CAN'][can_id]['value']/1023
+            velocity_m_s = (hal_data['CAN'][can_id]['value']
+                            / (SwerveModule.drive_velocity_to_native_units))
             # multiply by dt as we are calculating encoder delta
-            hal_data['CAN'][can_id]['enc_position'] += tm_diff*max_speed*percentvbus
-            motors_percentvbus.append(percentvbus)
+            hal_data['CAN'][can_id]['enc_position'] += (
+                    tm_diff*velocity_m_s/SwerveModule.drive_counts_per_meter)
+            motor_velocities.append(velocity_m_s)
 
-        lf_motor, lr_motor, rr_motor, rf_motor = motors_percentvbus
+        lf_motor, lr_motor, rr_motor, rf_motor = motor_velocities
 
         steer_positions = []
         for can_id, offset in zip(self.module_steer_can_ids, self.module_steer_offsets):
@@ -64,24 +65,23 @@ class PhysicsEngine:
         vx, vy, vw = \
             four_motor_swerve_drivetrain(lr_motor, rr_motor, lf_motor, rf_motor,
                                          lr_angle, rr_angle, lf_angle, rf_angle,
-                                         x_wheelbase=x_wheelbase, y_wheelbase=y_wheelbase,
-                                         speed=9)
-        self.controller.vector_drive(vx, vy, vw, tm_diff)
+                                         x_wheelbase=x_wheelbase, y_wheelbase=y_wheelbase)
+        self.controller.vector_drive(vx*self.M_TO_FT, vy*self.M_TO_FT, vw, tm_diff)
         print("vx %s, vy %s, vw %s" % (vx, vy, vw))
 
 
 def four_motor_swerve_drivetrain(lr_motor, rr_motor, lf_motor, rf_motor, lr_angle, rr_angle, lf_angle, rf_angle,
-                                 x_wheelbase=2, y_wheelbase=2, speed=5):
+                                 x_wheelbase=2, y_wheelbase=2):
     '''
         Four motors that can be rotated in any direction
 
         If any motors are inverted, then you will need to multiply that motor's
         value by -1.
 
-        :param lr_motor:   Left rear motor value (-1 to 1); 1 is forward
-        :param rr_motor:   Right rear motor value (-1 to 1); 1 is forward
-        :param lf_motor:   Left front motor value (-1 to 1); 1 is forward
-        :param rf_motor:   Right front motor value (-1 to 1); 1 is forward
+        :param lr_motor:   Left rear motor speed (m/s)
+        :param rr_motor:   Right rear motor speed (m/s)
+        :param lf_motor:   Left front motor speed (m/s)
+        :param rf_motor:   Right front motor speed (m/s)
 
         :param lr_angle:   Left rear motor angle in degrees (0 to 360 measured clockwise from forward position)
         :param rr_angle:   Right rear motor angle in degrees (0 to 360 measured clockwise from forward position)
@@ -90,16 +90,15 @@ def four_motor_swerve_drivetrain(lr_motor, rr_motor, lf_motor, rf_motor, lr_angl
 
         :param x_wheelbase: The distance in feet between right and left wheels.
         :param y_wheelbase: The distance in feet between forward and rear wheels.
-        :param speed:      Speed of robot in feet per second (see above)
 
         :returns: Speed of robot in x (ft/s), Speed of robot in y (ft/s),
                   clockwise rotation of robot (radians/s)
     '''
     # Calculate speed of each wheel
-    lr = lr_motor * speed
-    rr = rr_motor * speed
-    lf = lf_motor * speed
-    rf = rf_motor * speed
+    lr = lr_motor
+    rr = rr_motor
+    lf = lf_motor
+    rf = rf_motor
 
     # Calculate angle in radians
     lr_rad = math.radians(lr_angle)
@@ -123,11 +122,11 @@ def four_motor_swerve_drivetrain(lr_motor, rr_motor, lf_motor, rf_motor, lr_angl
 
     # Finds the rotational velocity by finding the torque and adding them up
     Vw = wheelbase_radius * (
-    (math.cos(lr_rad) * lr) + (math.cos(rr_rad) * -rr) + (math.cos(lf_rad) * lf) + (math.cos(rf_rad) * -rf))
+         (math.cos(lr_rad) * lr) + (math.cos(rr_rad) * -rr)
+         + (math.cos(lf_rad) * lf) + (math.cos(rf_rad) * -rf))
 
     Vx *= 0.25
     Vy *= 0.25
     Vw *= 0.25
-
 
     return Vx, Vy, Vw
